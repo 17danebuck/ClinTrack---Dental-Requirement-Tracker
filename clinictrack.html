@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ClinicTrack</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#F3F5F1;
+  --card:#FFFFFF;
+  --ink:#1C2321;
+  --ink-soft:#5B655F;
+  --ink-muted:#8B948E;
+  --teal:#29615B;
+  --teal-soft:#E4EEEC;
+  --line:#DAE1D8;
+  --line-strong:#B9C2B6;
+  --success:#3D7A4E;
+  --success-bg:#E7F1E8;
+  --warning:#B07C2C;
+  --warning-bg:#FBF0DE;
+  --danger:#A6432E;
+  --danger-bg:#F8E7E2;
+}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:'IBM Plex Sans',sans-serif;-webkit-font-smoothing:antialiased;}
+#app{max-width:640px;margin:0 auto;padding:32px 20px 80px;}
+h1,h2,h3{font-family:'Source Serif 4',serif;font-weight:500;margin:0;}
+h1{font-size:28px;}
+h2{font-size:19px;margin:36px 0 12px;}
+p{margin:0;}
+input,select,button{font-family:inherit;font-size:14px;}
+input[type=text],input[type=number],select{border:1px solid var(--line-strong);background:var(--card);color:var(--ink);border-radius:6px;padding:8px 10px;}
+input[type=text]:focus,input[type=number]:focus,select:focus{outline:2px solid var(--teal);outline-offset:1px;}
+button{border:1px solid var(--line-strong);background:var(--card);color:var(--ink);border-radius:6px;padding:8px 12px;cursor:pointer;}
+button:hover{border-color:var(--teal);}
+button.primary{background:var(--teal);color:#fff;border-color:var(--teal);}
+.row{display:flex;align-items:center;gap:8px;}
+.between{justify-content:space-between;}
+.wrap{flex-wrap:wrap;}
+.muted{color:var(--ink-soft);font-size:13px;}
+.tiny-muted{color:var(--ink-muted);font-size:12px;}
+.err{font-size:12px;color:var(--danger);min-height:16px;margin-top:4px;}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;}
+.divider{border-top:1px solid var(--line);padding:14px 0;}
+.divider:first-child{padding-top:0;}
+.quote{font-family:'Source Serif 4',serif;font-size:15px;line-height:1.6;margin-bottom:10px;color:var(--ink-soft);}
+.metrics{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+.metric{background:var(--teal-soft);border-radius:10px;padding:14px 16px;}
+.metric .num{font-size:26px;font-weight:500;font-family:'Source Serif 4',serif;color:var(--teal);}
+.metric .lbl{font-size:12.5px;color:var(--ink-soft);margin-bottom:4px;}
+.bar{position:relative;height:8px;background:var(--line);border-radius:4px;overflow:hidden;display:flex;margin:8px 0 6px;}
+.seg{height:100%;}
+.goal{position:absolute;top:-2px;bottom:-2px;width:1px;background:var(--ink);}
+.badge{font-size:12px;padding:2px 9px;border-radius:20px;}
+.badge.success{background:var(--success-bg);color:var(--success);}
+.badge.warning{background:var(--warning-bg);color:var(--warning);}
+.badge.danger{background:var(--danger-bg);color:var(--danger);}
+.plain-input{border:none;background:transparent;padding:0;flex:1;font-size:14px;font-weight:500;}
+.plain-input:focus{outline:none;border-bottom:1px solid var(--teal);}
+.proc-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12.5px;padding:6px 8px;background:var(--paper);border-radius:6px;margin-bottom:6px;}
+.proc-row[data-status=potential]{border-left:3px solid var(--line-strong);}
+.proc-row[data-status=planned]{border-left:3px solid var(--warning);}
+.proc-row[data-status=scheduled]{border-left:3px solid var(--teal);}
+.proc-row[data-status=completed]{border-left:3px solid var(--success);}
+.proc-name{font-weight:500;margin-right:2px;}
+.proc-qty{width:38px;padding:3px 4px;font-size:12px;border-radius:4px;}
+.proc-status-select{font-size:12px;padding:3px 4px;border-radius:4px;}
+.proc-date{font-size:12px;padding:2px 4px;border-radius:4px;max-width:128px;}
+.proc-remove{cursor:pointer;opacity:.55;margin-left:auto;padding:2px 4px;}
+.proc-remove:hover{opacity:1;color:var(--danger);}
+.comp-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;}
+.comp-item{display:flex;align-items:center;gap:6px;font-size:13px;}
+.icon-btn{border:none;background:none;color:var(--ink-muted);cursor:pointer;padding:4px;font-size:15px;}
+.icon-btn:hover{color:var(--danger);}
+.top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;}
+.reset{font-size:12px;color:var(--ink-muted);background:none;border:none;text-decoration:underline;cursor:pointer;padding:0;}
+.loading{padding:60px 20px;text-align:center;color:var(--ink-soft);font-family:'Source Serif 4',serif;}
+.saved-note{font-size:11px;color:var(--ink-muted);margin-top:2px;}
+.opp-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--line);}
+.opp-row:first-child{border-top:none;}
+.opp-name{font-size:14px;font-weight:500;}
+.opp-detail{font-size:12.5px;color:var(--ink-soft);margin-top:2px;}
+.view-btn{font-size:12px;padding:6px 10px;white-space:nowrap;}
+@media (max-width:420px){.comp-grid{grid-template-columns:1fr;}}
+</style>
+</head>
+<body>
+<div id="app"><div class="loading">Loading ClinicTrack…</div></div>
+<script>
+(function(){
+var STATUSES=['potential','planned','scheduled','completed'];
+var STATUS_LABEL={potential:'Potential',planned:'Planned',scheduled:'Scheduled',completed:'Completed'};
+var DEFAULT_QUOTES=[
+"Slow is smooth. Smooth is fast, especially in a canal.",
+"Every quad you scale today is one less between you and graduation.",
+"You don't need a perfect prep. You need a finished one.",
+"The patient in front of you is also a requirement in disguise.",
+"A finished denture beats a perfect one you never deliver.",
+"Today's SRP is tomorrow's checked box.",
+"You're not behind. You're mid-case.",
+"Ask for the case. The worst answer is the one you never sought out."
+];
+var STATE_KEY='clinictrack-state';
+var COMMUNITY_KEY='clinictrack-community-quotes';
+
+function uid(p){return p+'_'+Math.random().toString(36).slice(2,9);}
+function esc(s){return String(s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+
+function defaultState(){
+  var r1=uid('r'),r2=uid('r'),r3=uid('r'),r4=uid('r'),r5=uid('r');
+  return {
+    requirements:[
+      {id:r1,name:'Root canals (RCT)',required:12},
+      {id:r2,name:'Crowns',required:11},
+      {id:r3,name:'IPT quads',required:20},
+      {id:r4,name:'SRP quads',required:20},
+      {id:r5,name:'Arches',required:8}
+    ],
+    competencies:[
+      {id:uid('c'),name:'Anesthesia competency',done:false},
+      {id:uid('c'),name:'Clinic click competency',done:false},
+      {id:uid('c'),name:'Surgery competency',done:false},
+      {id:uid('c'),name:'Special needs competency',done:false},
+      {id:uid('c'),name:'Complex case presentation',done:false}
+    ],
+    patients:[
+      {id:uid('p'),label:'Example patient — edit or delete',procedures:[
+        {reqId:r1,quantity:1,status:'completed'},
+        {reqId:r2,quantity:1,status:'planned'},
+        {reqId:r4,quantity:2,status:'potential'}
+      ]}
+    ]
+  };
+}
+
+var state=null;
+var communityQuotes=[];
+var saveTimer=null;
+
+async function loadState(){
+  try{
+    var raw=localStorage.getItem(STATE_KEY);
+    if(raw){state=JSON.parse(raw);}
+    else{state=defaultState();}
+  }catch(e){state=defaultState();}
+  state.patients.forEach(function(p){p.procedures.forEach(function(pr){if(!pr.quantity)pr.quantity=1;if(pr.date===undefined)pr.date='';});});
+  try{
+    var craw=localStorage.getItem(COMMUNITY_KEY);
+    if(craw){communityQuotes=JSON.parse(craw);}
+  }catch(e){communityQuotes=[];}
+}
+
+function saveState(){
+  clearTimeout(saveTimer);
+  saveTimer=setTimeout(function(){
+    try{localStorage.setItem(STATE_KEY,JSON.stringify(state));}catch(e){}
+  },300);
+}
+function saveCommunity(){
+  try{localStorage.setItem(COMMUNITY_KEY,JSON.stringify(communityQuotes));}catch(e){}
+}
+
+function formatDate(d){
+  if(!d)return '';
+  var parts=d.split('-');
+  if(parts.length!==3)return d;
+  var months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return months[parseInt(parts[1])-1]+' '+parseInt(parts[2]);
+}
+function statusOptionsHtml(current){
+  return STATUSES.map(function(s){return '<option value="'+s+'"'+(s===current?' selected':'')+'>'+STATUS_LABEL[s]+'</option>';}).join('');
+}
+function computeReqStats(req){
+  var counts={potential:0,planned:0,scheduled:0,completed:0};
+  state.patients.forEach(function(p){p.procedures.forEach(function(pr){if(pr.reqId===req.id)counts[pr.status]+=(pr.quantity||1);});});
+  var projected=counts.completed+counts.scheduled+counts.planned;
+  var pipeline=projected+counts.potential;
+  var status,label;
+  if(counts.completed>=req.required){status='success';label='Done';}
+  else if(projected>=req.required){status='success';label='On track';}
+  else if(pipeline>=req.required){status='warning';label='Needs confirming';}
+  else{status='danger';label='Short by '+(req.required-pipeline);}
+  return {counts:counts,projected:projected,pipeline:pipeline,status:status,label:label};
+}
+
+function patientOpportunities(){
+  return state.patients.map(function(p){
+    var items=p.procedures.filter(function(pr){return pr.status==='potential'||pr.status==='planned';});
+    var total=items.reduce(function(a,pr){return a+(pr.quantity||1);},0);
+    var grouped={};
+    items.forEach(function(pr){
+      var req=state.requirements.find(function(r){return r.id===pr.reqId;});
+      var name=req?req.name:'Unknown';
+      grouped[name]=(grouped[name]||0)+(pr.quantity||1);
+    });
+    var label=Object.keys(grouped).map(function(k){return grouped[k]+' \u00D7 '+k;}).join(', ');
+    return {patient:p,total:total,label:label};
+  }).filter(function(x){return x.total>0;}).sort(function(a,b){return b.total-a.total;});
+}
+
+function render(){
+  var app=document.getElementById('app');
+  var pool=DEFAULT_QUOTES.concat(communityQuotes);
+  var idx=Math.floor(Date.now()/86400000)%pool.length;
+
+  var total=0,done=0;
+  state.requirements.forEach(function(r){total+=r.required;done+=Math.min(r.required,computeReqStats(r).counts.completed);});
+  total+=state.competencies.length;
+  done+=state.competencies.filter(function(c){return c.done;}).length;
+  var pct=total>0?Math.round(done/total*100):0;
+  var atRisk=state.requirements.filter(function(r){return computeReqStats(r).status==='danger';}).length;
+
+  var oppList=patientOpportunities().slice(0,5);
+  var oppHtml=oppList.length?oppList.map(function(o){
+    return '<div class="opp-row">'
+      +'<div><div class="opp-name">'+esc(o.patient.label)+'</div><div class="opp-detail">'+esc(o.label)+'</div></div>'
+      +'<button class="view-btn view-patient" data-id="'+o.patient.id+'">View patient</button>'
+      +'</div>';
+  }).join(''):'<p class="muted">Add patients with potential or planned procedures to see opportunities here.</p>';
+
+  var reqRows=state.requirements.map(function(req){
+    var s=computeReqStats(req);
+    var scale=Math.max(req.required,s.pipeline,1);
+    var segs=['completed','scheduled','planned','potential'].map(function(k){
+      var w=(s.counts[k]/scale*100);
+      if(w<=0)return '';
+      var color=k==='completed'?'var(--success)':k==='scheduled'?'var(--teal)':k==='planned'?'var(--warning)':'var(--line-strong)';
+      return '<div class="seg" style="width:'+w.toFixed(1)+'%;background:'+color+';"></div>';
+    }).join('');
+    var goalPct=Math.min(100,(req.required/scale*100)).toFixed(1);
+    return '<div class="divider">'
+      +'<div class="row between" style="margin-bottom:2px;">'
+      +'<input class="plain-input req-name" data-id="'+req.id+'" type="text" value="'+esc(req.name)+'" />'
+      +'<input type="number" min="0" step="1" class="req-count" data-id="'+req.id+'" value="'+req.required+'" style="width:56px;text-align:right;" />'
+      +'<button class="icon-btn req-del" data-id="'+req.id+'" aria-label="Remove">\u2715</button>'
+      +'</div>'
+      +'<div class="bar">'+segs+'<div class="goal" style="left:'+goalPct+'%;"></div></div>'
+      +'<div class="row between wrap">'
+      +'<span class="tiny-muted">'+s.counts.completed+' done \u00B7 '+s.counts.scheduled+' scheduled \u00B7 '+s.counts.planned+' planned \u00B7 '+s.counts.potential+' potential</span>'
+      +'<span class="badge '+s.status+'">'+s.label+'</span>'
+      +'</div></div>';
+  }).join('');
+
+  var compGrid=state.competencies.map(function(c){
+    return '<label class="comp-item">'
+      +'<input type="checkbox" class="comp-check" data-id="'+c.id+'" '+(c.done?'checked':'')+' />'
+      +'<input type="text" class="plain-input comp-name" data-id="'+c.id+'" value="'+esc(c.name)+'" style="font-weight:400;font-size:13px;" />'
+      +'<button class="icon-btn comp-del" data-id="'+c.id+'" aria-label="Remove" style="font-size:13px;">\u2715</button>'
+      +'</label>';
+  }).join('');
+
+  var gapsList=state.requirements.map(function(r){return {r:r,s:computeReqStats(r)};}).filter(function(x){return x.s.status!=='success';});
+  gapsList.sort(function(a,b){var order={danger:0,warning:1};return (order[a.s.status]||2)-(order[b.s.status]||2);});
+  var gapsHtml=gapsList.length?gapsList.map(function(g){
+    var remaining=Math.max(0,g.r.required-g.s.counts.completed);
+    var helpers=[];
+    state.patients.forEach(function(p){p.procedures.forEach(function(pr){if(pr.reqId===g.r.id&&(pr.status==='potential'||pr.status==='planned'))helpers.push(p.label+' \u00D7'+(pr.quantity||1)+' ('+STATUS_LABEL[pr.status]+(pr.date?', '+formatDate(pr.date):'')+')');});});
+    return '<div style="padding:8px 0;">'
+      +'<div class="row between"><span style="font-size:14px;font-weight:500;">'+esc(g.r.name)+'</span><span class="badge '+g.s.status+'">'+remaining+' to complete</span></div>'
+      +(helpers.length?'<p class="tiny-muted" style="margin-top:4px;">From: '+helpers.slice(0,3).map(esc).join(', ')+'</p>':'<p class="tiny-muted" style="margin-top:4px;">No patients in your pipeline for this yet.</p>')
+      +'</div>';
+  }).join(''):'<p class="muted" style="color:var(--success);">Every requirement is projected complete.</p>';
+
+  var reqOptions=state.requirements.map(function(r){return '<option value="'+r.id+'">'+esc(r.name)+'</option>';}).join('');
+  var statusOptions=STATUSES.map(function(s){return '<option value="'+s+'">'+STATUS_LABEL[s]+'</option>';}).join('');
+  var patientsHtml=state.patients.length?state.patients.map(function(p){
+    var rows=p.procedures.map(function(pr,i){
+      var req=state.requirements.find(function(r){return r.id===pr.reqId;});
+      var name=req?req.name:'Unknown';
+      return '<div class="proc-row" data-status="'+pr.status+'">'
+        +'<span class="proc-name">'+esc(name)+'</span>'
+        +'<input type="number" min="1" class="proc-qty" data-pid="'+p.id+'" data-pi="'+i+'" value="'+(pr.quantity||1)+'" title="Quantity" />'
+        +'<select class="proc-status-select" data-pid="'+p.id+'" data-pi="'+i+'">'+statusOptionsHtml(pr.status)+'</select>'
+        +'<input type="date" class="proc-date" data-pid="'+p.id+'" data-pi="'+i+'" value="'+(pr.date||'')+'" title="Target date (optional)" />'
+        +'<i class="proc-remove" data-pid="'+p.id+'" data-pi="'+i+'" aria-label="Remove procedure">\u2715</i>'
+        +'</div>';
+    }).join('');
+    return '<div class="divider" id="patient-'+p.id+'">'
+      +'<div class="row between" style="margin-bottom:8px;">'
+      +'<input class="plain-input pat-label" data-id="'+p.id+'" type="text" value="'+esc(p.label)+'" />'
+      +'<button class="icon-btn pat-del" data-id="'+p.id+'" aria-label="Remove">\u2715</button>'
+      +'</div>'
+      +'<div style="margin-bottom:10px;">'+(rows||'<span class="tiny-muted">No procedures yet.</span>')+'</div>'
+      +'<div class="row wrap">'
+      +'<select class="proc-req" data-pid="'+p.id+'" style="flex:1;min-width:120px;">'+reqOptions+'</select>'
+      +'<input type="number" min="1" class="new-proc-qty" data-pid="'+p.id+'" value="1" style="width:48px;" title="Quantity" />'
+      +'<select class="proc-status" data-pid="'+p.id+'">'+statusOptions+'</select>'
+      +'<input type="date" class="new-proc-date" data-pid="'+p.id+'" style="max-width:130px;" title="Target date (optional)" />'
+      +'<button class="proc-add" data-pid="'+p.id+'">Add</button>'
+      +'</div></div>';
+  }).join(''):'<p class="muted">No patients yet. Add one below to start mapping procedures to requirements.</p>';
+
+  var communityHtml=communityQuotes.length?communityQuotes.slice(-3).reverse().map(function(q){
+    return '<p class="tiny-muted" style="margin-top:4px;">\u201C'+esc(q)+'\u201D \u2014 a classmate</p>';
+  }).join(''):'';
+
+  app.innerHTML=
+    '<div class="top"><h1>ClinicTrack</h1><button class="reset" id="reset-btn">Start over</button></div>'
+    +'<p class="muted" style="margin-bottom:24px;">Your personal clinical requirement command center.</p>'
+    +'<div class="metrics">'
+      +'<div class="metric"><div class="lbl">Overall progress</div><div class="num">'+pct+'%</div></div>'
+      +'<div class="metric"><div class="lbl">Needs attention</div><div class="num">'+atRisk+'</div></div>'
+    +'</div>'
+    +'<h2>Best opportunities</h2>'
+    +'<div id="opportunities">'+oppHtml+'</div>'
+    +'<h2>Requirements</h2>'
+    +'<div id="requirements">'+reqRows+'</div>'
+    +'<div class="row" style="margin-top:12px;">'
+      +'<input type="text" id="new-req-name" placeholder="New requirement, e.g. Bridges" style="flex:1;" />'
+      +'<input type="number" min="0" id="new-req-count" placeholder="#" style="width:56px;" />'
+      +'<button id="add-req">Add</button>'
+    +'</div><p class="err" id="req-err"></p>'
+    +'<h2>Competencies</h2>'
+    +'<div class="comp-grid" id="competencies">'+compGrid+'</div>'
+    +'<div class="row" style="margin-top:12px;">'
+      +'<input type="text" id="new-comp-name" placeholder="New competency, e.g. Sedation" style="flex:1;" />'
+      +'<button id="add-comp">Add</button>'
+    +'</div><p class="err" id="comp-err"></p>'
+    +'<h2>What you need</h2>'
+    +'<div id="gaps">'+gapsHtml+'</div>'
+    +'<h2>Patients</h2>'
+    +'<div id="patients">'+patientsHtml+'</div>'
+    +'<div class="row" style="margin-top:12px;">'
+      +'<input type="text" id="new-patient" placeholder="New patient, e.g. Patient 4827" style="flex:1;" />'
+      +'<button id="add-patient">Add</button>'
+    +'</div><p class="err" id="patient-err"></p>'
+    +'<h2>Today\u2019s thought</h2>'
+    +'<p class="quote" id="quote-text">\u201C'+esc(pool[idx])+'\u201D</p>'
+    +'<div class="row"><input type="text" id="quote-input" placeholder="Share a pearl for classmates" style="flex:1;" /><button id="quote-add">Share</button></div>'
+    +'<p class="err" id="quote-err"></p>'
+    +'<div id="community-list">'+communityHtml+'</div>'
+    +'<p class="saved-note" style="margin-top:24px;">Data is saved in this browser, on this device. Opening the file on another device or browser starts fresh. Classmate pearls are local to your own browser too, not actually shared yet \u2014 that needs real hosting.</p>';
+
+  attachEvents();
+}
+
+function attachEvents(){
+  document.getElementById('reset-btn').onclick=function(){
+    if(confirm('Reset all requirements, competencies, and patients back to defaults?')){
+      state=defaultState();saveState();render();
+    }
+  };
+
+  document.getElementById('opportunities').addEventListener('click',function(e){
+    var b=e.target.closest('.view-patient');
+    if(b){
+      var el=document.getElementById('patient-'+b.dataset.id);
+      if(el)el.scrollIntoView({behavior:'smooth',block:'center'});
+    }
+  });
+
+  document.getElementById('requirements').addEventListener('change',function(e){
+    var t=e.target;
+    if(t.classList.contains('req-name')){var r=state.requirements.find(function(x){return x.id===t.dataset.id;});if(r)r.name=t.value;saveState();render();}
+    else if(t.classList.contains('req-count')){var r2=state.requirements.find(function(x){return x.id===t.dataset.id;});if(r2)r2.required=Math.max(0,parseInt(t.value)||0);saveState();render();}
+  });
+  document.getElementById('requirements').addEventListener('click',function(e){
+    var d=e.target.closest('.req-del');
+    if(d){state.requirements=state.requirements.filter(function(x){return x.id!==d.dataset.id;});saveState();render();}
+  });
+  document.getElementById('add-req').onclick=function(){
+    var nameEl=document.getElementById('new-req-name'),countEl=document.getElementById('new-req-count'),err=document.getElementById('req-err');
+    var name=nameEl.value.trim(),count=parseInt(countEl.value);
+    if(!name){err.textContent='Enter a requirement name first.';return;}
+    if(isNaN(count)||count<0){err.textContent='Enter how many are required.';return;}
+    state.requirements.push({id:uid('r'),name:name,required:count});
+    saveState();render();
+  };
+
+  document.getElementById('competencies').addEventListener('change',function(e){
+    var t=e.target;
+    if(t.classList.contains('comp-check')){var c=state.competencies.find(function(x){return x.id===t.dataset.id;});if(c)c.done=t.checked;saveState();render();}
+    else if(t.classList.contains('comp-name')){var c2=state.competencies.find(function(x){return x.id===t.dataset.id;});if(c2)c2.name=t.value;saveState();}
+  });
+  document.getElementById('competencies').addEventListener('click',function(e){
+    var d=e.target.closest('.comp-del');
+    if(d){state.competencies=state.competencies.filter(function(x){return x.id!==d.dataset.id;});saveState();render();}
+  });
+  document.getElementById('add-comp').onclick=function(){
+    var nameEl=document.getElementById('new-comp-name'),err=document.getElementById('comp-err');
+    var name=nameEl.value.trim();
+    if(!name){err.textContent='Enter a competency name first.';return;}
+    state.competencies.push({id:uid('c'),name:name,done:false});
+    saveState();render();
+  };
+
+  document.getElementById('patients').addEventListener('change',function(e){
+    var t=e.target;
+    if(t.classList.contains('pat-label')){var p=state.patients.find(function(x){return x.id===t.dataset.id;});if(p)p.label=t.value;saveState();render();}
+    else if(t.classList.contains('proc-qty')){
+      var p2=state.patients.find(function(x){return x.id===t.dataset.pid;});
+      if(p2){var i=parseInt(t.dataset.pi);p2.procedures[i].quantity=Math.max(1,parseInt(t.value)||1);saveState();render();}
+    }
+    else if(t.classList.contains('proc-status-select')){
+      var p4=state.patients.find(function(x){return x.id===t.dataset.pid;});
+      if(p4){var i4=parseInt(t.dataset.pi);p4.procedures[i4].status=t.value;saveState();render();}
+    }
+    else if(t.classList.contains('proc-date')){
+      var p5=state.patients.find(function(x){return x.id===t.dataset.pid;});
+      if(p5){var i5=parseInt(t.dataset.pi);p5.procedures[i5].date=t.value;saveState();}
+    }
+  });
+  document.getElementById('patients').addEventListener('click',function(e){
+    if(e.target.closest('.proc-qty')||e.target.closest('.proc-status-select')||e.target.closest('.proc-date'))return;
+    var d=e.target.closest('.pat-del');
+    if(d){state.patients=state.patients.filter(function(x){return x.id!==d.dataset.id;});saveState();render();return;}
+    var rem=e.target.closest('.proc-remove');
+    if(rem){var p=state.patients.find(function(x){return x.id===rem.dataset.pid;});if(p)p.procedures.splice(parseInt(rem.dataset.pi),1);saveState();render();return;}
+    var add=e.target.closest('.proc-add');
+    if(add){
+      var pid=add.dataset.pid;
+      var reqSel=document.querySelector('.proc-req[data-pid="'+pid+'"]');
+      var statSel=document.querySelector('.proc-status[data-pid="'+pid+'"]');
+      var qtyEl=document.querySelector('.new-proc-qty[data-pid="'+pid+'"]');
+      var dateEl=document.querySelector('.new-proc-date[data-pid="'+pid+'"]');
+      var p2b=state.patients.find(function(x){return x.id===pid;});
+      if(p2b&&reqSel&&statSel){
+        var qty=Math.max(1,parseInt(qtyEl&&qtyEl.value)||1);
+        p2b.procedures.push({reqId:reqSel.value,quantity:qty,status:statSel.value,date:dateEl?dateEl.value:''});
+        saveState();render();
+      }
+      return;
+    }
+  });
+  document.getElementById('add-patient').onclick=function(){
+    var nameEl=document.getElementById('new-patient'),err=document.getElementById('patient-err');
+    var name=nameEl.value.trim();
+    if(!name){err.textContent='Enter a patient identifier first.';return;}
+    state.patients.push({id:uid('p'),label:name,procedures:[]});
+    saveState();render();
+  };
+
+  document.getElementById('quote-add').onclick=function(){
+    var input=document.getElementById('quote-input'),err=document.getElementById('quote-err');
+    var val=input.value.trim();
+    if(!val){err.textContent='Write a thought before sharing.';return;}
+    communityQuotes.push(val);
+    saveCommunity();
+    render();
+  };
+}
+
+loadState().then(render).catch(function(){state=defaultState();render();});
+})();
+</script>
+</body>
+</html>
