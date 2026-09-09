@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ClinicTrack</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app"><div class="loading">Loading ClinicTrack…</div></div>
+  <script>
+    window.ClinicTrackBoot = { started: false };
+    window.addEventListener('error', function (event) {
+      if (window.ClinicTrackBoot.started) return;
+      var isScriptError = event.target && event.target.tagName === 'SCRIPT';
+      if (isScriptError || event.error) {
+        var app = document.getElementById('app');
+        if (app) app.innerHTML = '<div class="loading">ClinicTrack couldn\'t start. Please reload the page.<br><span class="tiny-muted">' + String((event.error && event.error.message) || 'A required script failed to run.') + '</span></div>';
+      }
+    }, true);
+  </script>
+<script>
+(function () {
+const APP_SCHEMA_VERSION = 3;
+
+const PROCEDURE_STATUSES = ['potential', 'planned', 'scheduled', 'completed'];
+const STATUS_LABELS = {
+  potential: 'Potential', planned: 'Planned', scheduled: 'Scheduled', completed: 'Completed'
+};
+
+const DAILY_PEARLS = [
+  { category: 'Clinical Pearl', text: 'Check proximal contacts before adjusting occlusion on a new crown.' },
+  { category: 'Dental School Tip', text: 'Review tomorrow\'s patients before leaving clinic so missing radiographs or approvals do not surprise you in the morning.' },
+  { category: 'Requirement Tip', text: 'Potential treatment only helps your forecast if the patient is realistically likely to complete it.' },
+  { category: 'Study / Organization Tip', text: 'After a practical, write down the two things you would change while the experience is still fresh.' },
+  { category: 'Dental Fact', text: 'A well-written note records what you observed, what you did, and what the patient understood before they leave.' },
+  { category: 'Clinical Pearl', text: 'For endo, confirm isolation and a reproducible working length before letting speed become the goal.' },
+  { category: 'Requirement Tip', text: 'A scheduled event improves your forecast; only a completed event advances completed credit.' },
+  { category: 'Motivation', text: 'A difficult clinic day can still be a useful one when you leave with a clearer next step.' }
+];
+// Retained as a compatibility alias for existing local pearl entries.
+const DEFAULT_QUOTES = DAILY_PEARLS.map((pearl) => pearl.text);
+
+const PROCEDURE_TYPES = {
+  'class-i': { label: 'Class I', category: 'Restorative', clinicalPoints: 1 }, 'class-ii': { label: 'Class II', category: 'Restorative', clinicalPoints: 2 }, mod: { label: 'MOD', category: 'Restorative', clinicalPoints: 3 },
+  'class-iii': { label: 'Class III', category: 'Restorative', clinicalPoints: 3 }, 'class-iv': { label: 'Class IV', category: 'Restorative', clinicalPoints: 3 }, 'class-v': { label: 'Class V', category: 'Restorative', clinicalPoints: 1 },
+  'build-up': { label: 'Build-up', category: 'Restorative', clinicalPoints: 2, quantityStep: 0.5 }, crown: { label: 'Crown', category: 'Fixed / Prostho', clinicalPoints: 0, quantityStep: 0.5 }, rct: { label: 'RCT', category: 'Endodontics', clinicalPoints: 0, quantityStep: 1 },
+  extraction: { label: 'Extraction', category: 'Surgery', clinicalPoints: 0, quantityStep: 1 }, 'denture-arch': { label: 'Denture Arch', category: 'Fixed / Prostho', clinicalPoints: 0, quantityStep: 0.5 }, spt: { label: 'SPT', category: 'Periodontics', clinicalPoints: 0, quantityStep: 1 },
+  'ipt-quad': { label: 'IPT Quad', category: 'Periodontics', clinicalPoints: 0 }, assist: { label: 'Assist', category: 'Other', clinicalPoints: 0 }
+};
+
+// This is data rather than scattered application logic, so later school templates
+// can supply a different requirement list without changing calculations.
+const DEFAULT_TRACKER_TEMPLATE = {
+  name: 'ClinicTrack starter template',
+  requirements: [
+    { name: 'Crowns', target: 11, unit: 'crowns', mapping: { procedureType: 'crown', contribution: 'quantity' }, notes: 'Up to 2 may be minor crowns.' },
+    { name: 'Canals', target: 12, unit: 'canals', startingCredit: 1, mapping: { procedureType: 'rct', contribution: 'canalCount' }, notes: 'Includes 1 starting canal credit; the 12th canal is associated with Endo Solo.' },
+    { name: 'Denture Arches', target: 8, unit: 'arches', mapping: { procedureType: 'denture-arch', contribution: 'quantity' } },
+    { name: 'SPTs', target: 20, unit: 'SPTs', mapping: { procedureType: 'spt', contribution: 'quantity' } },
+    { name: 'IPT Quads', target: 20, unit: 'quads', mapping: { procedureType: 'ipt-quad', contribution: 'quantity' } },
+    { name: 'Assists', target: 28, unit: 'assists', mapping: { procedureType: 'assist', contribution: 'quantity' } },
+    { name: 'Junior Phase Completes', target: 10, unit: 'completes', context: { year: 'junior' }, trackingMode: 'manual' },
+    { name: 'Senior Phase Completes', target: 10, unit: 'completes', context: { year: 'senior' }, trackingMode: 'manual' },
+    { name: 'Junior Official Creighton GD Points', target: 190, unit: 'official points', context: { year: 'junior' }, trackingMode: 'external', description: 'Official Creighton requirement; ClinicTrack Clinical Points are not an official calculation.' },
+    { name: 'Senior Official Creighton GD Points', target: 100, unit: 'official points', context: { year: 'senior' }, trackingMode: 'external', description: 'Official Creighton requirement; ClinicTrack Clinical Points are not an official calculation.' }
+  ],
+  competencies: [
+    'Anesthesia competency', 'Clinic click competency', 'Surgery competency',
+    'Special needs competency', 'Complex case presentation'
+  ]
+};
+
+window.ClinicTrackConfig = { APP_SCHEMA_VERSION, PROCEDURE_STATUSES, STATUS_LABELS, DAILY_PEARLS, DEFAULT_QUOTES, PROCEDURE_TYPES, DEFAULT_TRACKER_TEMPLATE };
+})();
+
+</script>
+<script>
+(function () {
+const { APP_SCHEMA_VERSION, DEFAULT_TRACKER_TEMPLATE, PROCEDURE_STATUSES, PROCEDURE_TYPES } = window.ClinicTrackConfig;
+function createId(prefix) { const value = window.crypto?.randomUUID?.().replaceAll('-', '') || `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`; return `${prefix}_${value}`; }
+const integer = (value, fallback = 0) => /^\d+$/.test(String(value ?? '')) ? Number(value) : fallback;
+const quantityStepFor = (procedureType) => PROCEDURE_TYPES[procedureType]?.quantityStep === 0.5 ? 0.5 : 1;
+const validQuantityFor = (value, procedureType) => {
+  const number = Number(value);
+  const step = quantityStepFor(procedureType);
+  return Number.isFinite(number) && number >= step && Math.abs(number / step - Math.round(number / step)) < 0.000001;
+};
+const quantity = (value, procedureType) => validQuantityFor(value, procedureType) ? Math.round(Number(value) / quantityStepFor(procedureType)) * quantityStepFor(procedureType) : quantityStepFor(procedureType);
+const nonNegative = (value, fallback = 0) => { const number = Number.parseInt(value, 10); return Number.isFinite(number) && number >= 0 ? number : fallback; };
+const text = (value, fallback = '') => typeof value === 'string' ? value.trim() : fallback;
+const date = (value) => { if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return ''; const parsed = new Date(`${value}T00:00:00Z`); return Number.isNaN(parsed.valueOf()) || parsed.toISOString().slice(0, 10) !== value ? '' : value; };
+const status = (value) => PROCEDURE_STATUSES.includes(value) ? value : 'potential';
+const type = (value) => Object.prototype.hasOwnProperty.call(PROCEDURE_TYPES, value) ? value : 'other';
+function legacyType(requirement) { const name = (requirement?.name || '').toLowerCase(); if (name.includes('root canal') || name.includes('rct')) return 'rct'; if (name.includes('crown')) return 'crown'; if (name.includes('ipt')) return 'ipt-quad'; if (name.includes('srp') || name.includes('spt')) return 'spt'; if (name.includes('arch')) return 'denture-arch'; if (name.includes('assist')) return 'assist'; return 'other'; }
+
+function createClinicalEvent(input = {}) {
+  const procedureType = type(input.procedureType); const count = quantity(input.quantity, procedureType);
+  const eventStatus = status(input.status);
+  const canals = integer(input.canalCount ?? count, count);
+  return { id: text(input.id) || createId('e'), procedureType, quantity: count, status: eventStatus, date: date(input.date), patientId: text(input.patientId) || null, notes: text(input.notes), requirementId: text(input.requirementId || input.reqId) || null, requirementName: text(input.requirementName), canalCount: procedureType === 'rct' ? Math.max(eventStatus === 'completed' ? 1 : 0, canals) : null };
+}
+function createDefaultState() {
+  const requirements = DEFAULT_TRACKER_TEMPLATE.requirements.map((item) => createRequirement(item)); const patientId = createId('p');
+  const byType = (procedureType) => requirements.find((requirement) => requirement.mapping?.procedureType === procedureType)?.id || null;
+  return { schemaVersion: APP_SCHEMA_VERSION, templateName: DEFAULT_TRACKER_TEMPLATE.name, requirements, archivedRequirements: [], competencies: DEFAULT_TRACKER_TEMPLATE.competencies.map((name) => ({ id: createId('c'), name, done: false })), patients: [{ id: patientId, label: 'Example patient — edit or delete' }], clinicalEvents: [createClinicalEvent({ procedureType: 'rct', canalCount: 1, status: 'completed', patientId, requirementId: byType('rct') }), createClinicalEvent({ procedureType: 'crown', status: 'planned', patientId, requirementId: byType('crown') }), createClinicalEvent({ procedureType: 'spt', quantity: 2, status: 'potential', patientId, requirementId: byType('spt') })] };
+}
+function createRequirement(input = {}) { const legacyProcedureType = legacyType(input); const mapping = input.mapping && Object.prototype.hasOwnProperty.call(PROCEDURE_TYPES, input.mapping.procedureType) ? { procedureType: input.mapping.procedureType, contribution: input.mapping.contribution === 'canalCount' ? 'canalCount' : 'quantity' } : (legacyProcedureType !== 'other' ? { procedureType: legacyProcedureType, contribution: legacyProcedureType === 'rct' ? 'canalCount' : 'quantity' } : null); return { id: text(input.id) || createId('r'), name: text(input.name), target: integer(input.target ?? input.required), required: integer(input.target ?? input.required), unit: text(input.unit, 'units'), startingCredit: nonNegative(input.startingCredit), description: text(input.description), notes: text(input.notes), context: input.context?.year ? { year: input.context.year } : null, mapping, trackingMode: ['event','manual','external'].includes(input.trackingMode) ? input.trackingMode : (mapping ? 'event' : 'manual') }; }
+function normalizeRequirements(items, prefix) { const seen = new Set(); return (Array.isArray(items) ? items : []).flatMap((item) => { const requirement = createRequirement({ ...item, id: text(item?.id) || createId(prefix) }); if (seen.has(requirement.id) || !requirement.name) return []; seen.add(requirement.id); return [requirement]; }); }
+
+// Migrations are intentionally explicit. Normalization below still protects
+// against malformed fields, while this sequence documents supported state eras.
+function migrateV1ToV2(raw) { return { ...raw, schemaVersion: 2 }; }
+function migrateV2ToV3(raw) { return { ...raw, schemaVersion: 3, archivedRequirements: Array.isArray(raw.archivedRequirements) ? raw.archivedRequirements : [] }; }
+function migrateRawState(raw) {
+  let state = { ...raw };
+  let version = Number.isInteger(state.schemaVersion) ? state.schemaVersion : 1;
+  if (version > APP_SCHEMA_VERSION) throw new Error('This ClinicTrack data was created by a newer version.');
+  while (version < APP_SCHEMA_VERSION) {
+    if (version === 1) state = migrateV1ToV2(state);
+    else if (version === 2) state = migrateV2ToV3(state);
+    else throw new Error('Unsupported ClinicTrack data version.');
+    version = state.schemaVersion;
+  }
+  return state;
+}
+function validateAndMigrateState(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return createDefaultState();
+  raw = migrateRawState(raw);
+  const requirements = normalizeRequirements(raw.requirements, 'r'); const archivedRequirements = normalizeRequirements(raw.archivedRequirements, 'ar').filter((item) => !requirements.some((requirement) => requirement.id === item.id)); const requirementIndex = new Map([...requirements, ...archivedRequirements].map((item) => [item.id, item]));
+  const patients = (Array.isArray(raw.patients) ? raw.patients : []).flatMap((item) => { const label = text(item?.label); return label ? [{ id: text(item.id) || createId('p'), label }] : []; }); const patientIds = new Set(patients.map((item) => item.id));
+  const competencies = (Array.isArray(raw.competencies) ? raw.competencies : []).flatMap((item) => { const name = text(item?.name); return name ? [{ id: text(item.id) || createId('c'), name, done: item.done === true }] : []; });
+  const legacyEvents = (Array.isArray(raw.patients) ? raw.patients : []).flatMap((patient) => (Array.isArray(patient?.procedures) ? patient.procedures : []).map((procedure) => { const requirement = requirementIndex.get(text(procedure?.reqId)); const procedureType = legacyType(requirement); const oldQuantity = quantity(procedure?.quantity); return createClinicalEvent({ id: procedure.id, procedureType, quantity: procedureType === 'rct' ? 1 : oldQuantity, canalCount: procedureType === 'rct' ? oldQuantity : null, status: procedure.status, date: procedure.date, patientId: patientIds.has(text(patient?.id)) ? text(patient.id) : null, requirementId: procedure.reqId, requirementName: procedure.requirementName || requirement?.name }); }));
+  const sourceEvents = Array.isArray(raw.clinicalEvents) ? raw.clinicalEvents : legacyEvents; const eventIds = new Set();
+  const clinicalEvents = sourceEvents.flatMap((item) => { const event = createClinicalEvent(item); if (eventIds.has(event.id)) return []; eventIds.add(event.id); if (event.patientId && !patientIds.has(event.patientId)) event.patientId = null; if (event.requirementId && !event.requirementName) event.requirementName = requirementIndex.get(event.requirementId)?.name || 'Archived requirement'; return [event]; });
+  return { schemaVersion: APP_SCHEMA_VERSION, templateName: text(raw.templateName, DEFAULT_TRACKER_TEMPLATE.name), requirements, archivedRequirements, competencies, patients, clinicalEvents };
+}
+function archiveRequirement(state, requirementId) { const requirement = state.requirements.find((item) => item.id === requirementId); if (!requirement) return state; return { ...state, requirements: state.requirements.filter((item) => item.id !== requirementId), archivedRequirements: [...state.archivedRequirements.filter((item) => item.id !== requirementId), { ...requirement, deletedAt: new Date().toISOString() }], clinicalEvents: state.clinicalEvents.map((event) => event.requirementId === requirementId ? { ...event, requirementName: requirement.name } : event) }; }
+function addRequirement(state, input) { return { ...state, requirements: [...state.requirements, createRequirement(input)] }; }
+function updateRequirement(state, requirementId, changes) { return { ...state, requirements: state.requirements.map((item) => item.id === requirementId ? createRequirement({ ...item, ...changes, id: item.id }) : item) }; }
+function requirementById(state, requirementId) { return state.requirements.find((item) => item.id === requirementId) || state.archivedRequirements.find((item) => item.id === requirementId); }
+function requirementLabel(state, event) { return requirementById(state, event.requirementId)?.name || event.requirementName || 'Unmapped activity'; }
+function eventRequirementQuantity(event, requirement = null) { return requirement?.mapping?.contribution === 'canalCount' || (!requirement && event.procedureType === 'rct') ? event.canalCount : event.quantity; }
+function eventsForPatient(state, patientId) { return state.clinicalEvents.filter((event) => event.patientId === patientId); }
+// Explicit requirement associations always win. Type-based mapping is only a fallback
+// for unassociated events, preventing archived or duplicate requirements from sharing credit.
+function computeRequirementStats(state, requirement) { const counts = { potential: 0, planned: 0, scheduled: 0, completed: requirement.startingCredit || 0 }; state.clinicalEvents.forEach((event) => { const mapped = event.requirementId ? event.requirementId === requirement.id : (requirement.mapping && event.procedureType === requirement.mapping.procedureType && state.requirements.filter((item) => item.mapping?.procedureType === event.procedureType && item.trackingMode === 'event').length === 1); if (mapped) counts[event.status] += eventRequirementQuantity(event, requirement); }); const projected = counts.completed + counts.scheduled + counts.planned, pipeline = projected + counts.potential, target = requirement.target ?? requirement.required; if (counts.completed >= target) return { counts, projected, pipeline, status: 'success', label: 'Complete', target }; if (projected >= target) return { counts, projected, pipeline, status: 'success', label: 'On track', target }; if (pipeline >= target) return { counts, projected, pipeline, status: 'warning', label: 'Needs confirming', target }; return { counts, projected, pipeline, status: 'danger', label: `Short by ${target - pipeline}`, target }; }
+function clinicalPointsForEvent(event) { return event.status === 'completed' ? (PROCEDURE_TYPES[event.procedureType]?.clinicalPoints || 0) * event.quantity : 0; }
+function computeClinicalPoints(state) { return state.clinicalEvents.reduce((total, event) => total + clinicalPointsForEvent(event), 0); }
+function computeClinicalExperienceStats(state) { const stats = { canals: 0 }; Object.keys(PROCEDURE_TYPES).forEach((key) => { stats[key] = 0; }); state.clinicalEvents.filter((event) => event.status === 'completed').forEach((event) => { stats[event.procedureType] = (stats[event.procedureType] || 0) + event.quantity; if (event.procedureType === 'rct') stats.canals += event.canalCount; }); return stats; }
+function addClinicalEvent(state, input) { return { ...state, clinicalEvents: [...state.clinicalEvents, createClinicalEvent(input)] }; }
+function updateClinicalEvent(state, eventId, changes) { return { ...state, clinicalEvents: state.clinicalEvents.map((event) => event.id === eventId ? createClinicalEvent({ ...event, ...changes, id: event.id }) : event) }; }
+function deleteClinicalEvent(state, eventId) { return { ...state, clinicalEvents: state.clinicalEvents.filter((event) => event.id !== eventId) }; }
+function validateQuickAddInput(input) {
+  const errors = {};
+  if (!Object.prototype.hasOwnProperty.call(PROCEDURE_TYPES, input?.procedureType)) errors.procedureType = 'Choose a procedure.';
+  const step = quantityStepFor(input?.procedureType);
+  if (!validQuantityFor(input?.quantity, input?.procedureType)) errors.quantity = step === 0.5 ? 'Quantity must be a positive whole or half unit.' : 'Quantity must be a positive whole number.';
+  if (!PROCEDURE_STATUSES.includes(input?.status)) errors.status = 'Choose a valid status.';
+  if (!date(input?.date)) errors.date = 'Enter a valid date.';
+  if (input?.procedureType === 'rct') {
+    if (!/^\d+$/.test(String(input?.canalCount ?? '')) || (input?.status === 'completed' && Number(input.canalCount) < 1)) errors.canalCount = input?.status === 'completed' ? 'Completed RCT canal count must be a positive whole number.' : 'Canal count must be a non-negative whole number.';
+  }
+  return { valid: Object.keys(errors).length === 0, errors };
+}
+function saveQuickAddEvent(state, input, eventId = null) {
+  const validation = validateQuickAddInput(input); if (!validation.valid) return { state, event: null, errors: validation.errors };
+  const nextState = eventId ? updateClinicalEvent(state, eventId, input) : addClinicalEvent(state, input);
+  return { state: nextState, event: eventId ? nextState.clinicalEvents.find((item) => item.id === eventId) : nextState.clinicalEvents.at(-1), errors: {} };
+}
+function unlinkPatient(state, patientId) { return { ...state, patients: state.patients.filter((patient) => patient.id !== patientId), clinicalEvents: state.clinicalEvents.map((event) => event.patientId === patientId ? { ...event, patientId: null } : event) }; }
+function patientOpportunities(state) { return state.patients.map((patient) => { const items = eventsForPatient(state, patient.id).filter((event) => event.status === 'potential' || event.status === 'planned'), grouped = {}; items.forEach((event) => { const label = requirementLabel(state, event); grouped[label] = (grouped[label] || 0) + eventRequirementQuantity(event); }); return { patient, total: items.reduce((total, event) => total + eventRequirementQuantity(event), 0), label: Object.entries(grouped).map(([name, total]) => `${total} × ${name}`).join(', ') }; }).filter((item) => item.total > 0).sort((a, b) => b.total - a.total); }
+window.ClinicTrackDomain = { addClinicalEvent, addRequirement, archiveRequirement, clinicalPointsForEvent, computeClinicalExperienceStats, computeClinicalPoints, computeRequirementStats, createClinicalEvent, createDefaultState, createId, createRequirement, deleteClinicalEvent, eventRequirementQuantity, eventsForPatient, migrateRawState, patientOpportunities, procedureTypeForRequirement: legacyType, quantityStepFor, requirementById, requirementLabel, saveQuickAddEvent, unlinkPatient, updateClinicalEvent, updateRequirement, validateAndMigrateState, validateQuickAddInput };
+})();
+
+</script>
+<script>
+(function () {
+const { validateAndMigrateState } = window.ClinicTrackDomain;
+
+const STATE_KEY = 'clinictrack-state';
+const COMMUNITY_KEY = 'clinictrack-community-quotes';
+const RECOVERY_KEY = 'clinictrack-state-recovery';
+let lastLoadError = null;
+
+function loadState(storage = localStorage) {
+  lastLoadError = null;
+  const raw = storage.getItem(STATE_KEY);
+  try { return validateAndMigrateState(JSON.parse(raw)); }
+  catch (error) {
+    // Keep the original payload before presenting a usable blank state. This
+    // prevents a later normal save from being the only remaining copy.
+    try { if (raw) storage.setItem(RECOVERY_KEY, raw); } catch (_) {}
+    lastLoadError = { message: 'Saved ClinicTrack data could not be read. A recovery copy was preserved on this device.', error };
+    return validateAndMigrateState(null);
+  }
+}
+
+function saveState(state, storage = localStorage) {
+  try { storage.setItem(STATE_KEY, JSON.stringify(state)); return { ok: true }; }
+  catch (error) { return { ok: false, error }; }
+}
+
+function loadQuotes(storage = localStorage) {
+  try { const value = JSON.parse(storage.getItem(COMMUNITY_KEY)); return Array.isArray(value) ? value.filter((item) => typeof item === 'string') : []; }
+  catch { return []; }
+}
+
+function saveQuotes(quotes, storage = localStorage) {
+  try { storage.setItem(COMMUNITY_KEY, JSON.stringify(quotes)); return { ok: true }; }
+  catch (error) { return { ok: false, error }; }
+}
+
+function getLoadError() { return lastLoadError; }
+function loadRecovery(storage = localStorage) {
+  const raw = storage.getItem(RECOVERY_KEY);
+  return raw ? JSON.parse(raw) : null;
+}
+function clearRecovery(storage = localStorage) { storage.removeItem(RECOVERY_KEY); }
+
+window.ClinicTrackStorage = { COMMUNITY_KEY, RECOVERY_KEY, STATE_KEY, clearRecovery, getLoadError, loadQuotes, loadRecovery, loadState, saveQuotes, saveState };
+})();
+
+</script>
+<script>
+
+(function(){
+try {
+const { DAILY_PEARLS, DEFAULT_QUOTES, PROCEDURE_STATUSES: STATUSES, STATUS_LABELS: STATUS_LABEL, PROCEDURE_TYPES } = window.ClinicTrackConfig || {};
+const { addClinicalEvent, addRequirement, archiveRequirement, computeClinicalExperienceStats, computeClinicalPoints, computeRequirementStats, createDefaultState, createId, deleteClinicalEvent, eventRequirementQuantity, eventsForPatient, patientOpportunities, procedureTypeForRequirement, quantityStepFor, requirementLabel, saveQuickAddEvent, unlinkPatient, updateClinicalEvent, updateRequirement, validateAndMigrateState } = window.ClinicTrackDomain || {};
+const { clearRecovery, getLoadError, loadQuotes, loadRecovery, loadState, saveQuotes, saveState: persistState } = window.ClinicTrackStorage || {};
+if (!DEFAULT_QUOTES || !loadState || !createDefaultState) throw new Error('ClinicTrack scripts did not load in the required order.');
+function esc(s){return String(s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+
+var state=null;
+var communityQuotes=[];
+var saveTimer=null;
+var quickAdd=null;
+var successMessage='';
+var persistenceError='';
+var activeView='dashboard';
+var confirmation=null;
+
+function saveState(){
+  var result=persistState(state);
+  persistenceError=result.ok?'':"Couldn't save your changes on this device. Your browser storage may be unavailable or full.";
+  return result.ok;
+}
+function saveCommunity(){
+  try{saveQuotes(communityQuotes);}catch(e){}
+}
+
+function formatDate(d){
+  if(!d)return '';
+  var parts=d.split('-');
+  if(parts.length!==3)return d;
+  var months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return months[parseInt(parts[1])-1]+' '+parseInt(parts[2]);
+}
+function statusOptionsHtml(current){
+  return STATUSES.map(function(s){return '<option value="'+s+'"'+(s===current?' selected':'')+'>'+STATUS_LABEL[s]+'</option>';}).join('');
+}
+function computeReqStats(req){
+  return computeRequirementStats(state,req);
+}
+function today(){return new Date().toISOString().slice(0,10);}
+function openQuickAdd(event){quickAdd=event?{...event}: {procedureType:'',quantity:1,status:'completed',date:today(),patientId:'',notes:'',canalCount:1};render();}
+function askConfirmation(title,message,action,acceptLabel){confirmation={title:title,message:message,action:action,acceptLabel:acceptLabel||'Delete'};render();}
+function confirmationMarkup(){return confirmation?'<div class="modal-backdrop confirm-backdrop"><section class="confirm-panel" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title"><h2 id="confirm-title">'+esc(confirmation.title)+'</h2><p>'+esc(confirmation.message)+'</p><div class="quick-actions"><button id="confirm-cancel">Cancel</button><button class="danger-action" id="confirm-accept">'+esc(confirmation.acceptLabel)+'</button></div></section></div>':'';}
+function procedureGroups(){return [['Restorative',['class-i','class-ii','mod','class-iii','class-iv','class-v','build-up']],['Fixed / Prostho',['crown','denture-arch']],['Endodontics',['rct']],['Periodontics',['spt','ipt-quad']],['Surgery',['extraction']],['Other',['assist']]];}
+function quickAddMarkup(){
+  if(!quickAdd)return '';
+  var selected=quickAdd.procedureType;
+  var choices=procedureGroups().map(function(group){return '<div class="procedure-group"><h3>'+group[0]+'</h3><div class="procedure-grid">'+group[1].map(function(id){return '<button class="procedure-choice '+(selected===id?'selected':'')+'" data-type="'+id+'">'+PROCEDURE_TYPES[id].label+'</button>';}).join('')+'</div></div>';}).join('');
+  var patientOptions='<option value="">No patient</option>'+state.patients.map(function(patient){return '<option value="'+patient.id+'"'+(quickAdd.patientId===patient.id?' selected':'')+'>'+esc(patient.label)+'</option>';}).join('');
+  var errorHtml=quickAdd.errors?Object.values(quickAdd.errors).map(esc).join(' '):'';
+  var step=selected&&quantityStepFor?quantityStepFor(selected):1;
+  return '<div class="modal-backdrop" id="quick-backdrop"><section class="quick-panel" role="dialog" aria-modal="true" aria-labelledby="quick-title"><div class="row between"><h2 id="quick-title">'+(quickAdd.id?'Edit clinical event':'Add clinical event')+'</h2><button id="quick-close" aria-label="Close">Close</button></div><p class="muted">Choose what you did. Everything else is optional.</p>'+choices+'<div class="quick-fields">'
+    +'<label class="quick-field">Quantity<input type="number" id="quick-quantity" min="'+step+'" step="'+step+'" value="'+quickAdd.quantity+'">'+(step===0.5?'<small class="tiny-muted">Whole or half units accepted.</small>':'')+'</label>'
+    +(selected==='rct'?'<label class="quick-field">Canals completed<input type="number" id="quick-canals" min="1" step="1" value="'+quickAdd.canalCount+'"></label>':'')
+    +'<label class="quick-field">Status<select id="quick-status">'+statusOptionsHtml(quickAdd.status)+'</select></label>'
+    +'<label class="quick-field">Date<input type="date" id="quick-date" value="'+esc(quickAdd.date)+'"></label>'
+    +'<label class="quick-field full">Patient (optional)<select id="quick-patient">'+patientOptions+'</select></label>'
+    +'<label class="quick-field full">Notes (optional)<textarea id="quick-notes" placeholder="Optional clinical note">'+esc(quickAdd.notes||'')+'</textarea></label>'
+    +'</div><p class="err" id="quick-error">'+errorHtml+'</p><div class="quick-actions">'+(quickAdd.id?'<button class="danger-action" id="quick-delete">Delete event</button>':'')+'<button id="quick-cancel">Cancel</button><button class="primary" id="quick-save">Save event</button></div></section></div>';
+}
+function experienceMarkup(){
+  var completed=state.clinicalEvents.filter(function(event){return event.status==='completed';});
+  if(!completed.length)return '<section id="experience-view" class="'+(activeView==='experience'?'':'view-hidden')+'"><div class="top"><h1>Clinical Experience</h1></div><div class="empty-experience"><h2>Your clinical experience will appear here.</h2><p class="muted" style="margin:8px 0 16px;">Log your first procedure with + ADD.</p><button class="primary" id="experience-add">+ ADD</button></div></section>';
+  var stats=computeClinicalExperienceStats(state), points=computeClinicalPoints(state);
+  var groups=[['Restorative',['class-i','class-ii','mod','class-iii','class-iv','class-v','build-up']],['Fixed / Prostho',['crown','denture-arch']],['Endodontics',['rct','canals']],['Periodontics',['spt','ipt-quad']],['Surgery',['extraction']],['Other',['assist']]];
+  var groupHtml=groups.map(function(group){return '<section class="experience-group"><h2>'+group[0]+'</h2><div class="experience-grid">'+group[1].map(function(key){var label=key==='canals'?'Canals':PROCEDURE_TYPES[key].label; if(key==='rct')label='RCTs'; if(key==='crown')label='Crowns'; if(key==='denture-arch')label='Denture Arches'; if(key==='spt')label='SPTs'; if(key==='ipt-quad')label='IPT Quads'; if(key==='extraction')label='Extractions'; if(key==='assist')label='Assists'; return '<div class="experience-card"><div class="label">'+label+'</div><div class="value">'+(stats[key]||0)+'</div></div>';}).join('')+'</div></section>';}).join('');
+  var recent=completed.slice().sort(function(a,b){return (b.date||'').localeCompare(a.date||'');}).slice(0,8).map(function(event){var name=PROCEDURE_TYPES[event.procedureType]?.label||'Clinical event'; var detail=event.procedureType==='rct'?' — '+event.canalCount+' canals':' × '+event.quantity; return '<div class="activity-row"><div style="flex:1;"><div>'+esc(name)+detail+'</div><div class="activity-date">'+(event.date?formatDate(event.date):'No date')+'</div></div><button class="proc-edit" data-eid="'+event.id+'">Edit</button></div>';}).join('');
+  return '<section id="experience-view" class="'+(activeView==='experience'?'':'view-hidden')+'"><div class="top"><h1>Clinical Experience</h1></div><p class="muted">What you have completed clinically.</p><div class="experience-hero"><div class="lbl">Clinical Points</div><div class="num">'+points+'</div><p class="points-note">ClinicTrack Clinical Points are an estimated measure of clinical activity and are not official Creighton GD points.</p></div><p class="tiny-muted">'+completed.length+' completed clinical event'+(completed.length===1?'':'s')+'</p>'+groupHtml+'<section class="experience-group"><h2>Recent activity</h2><div class="card">'+recent+'</div></section></section>';
+}
+function requirementsMarkup(){
+  var trackable=state.requirements.filter(function(requirement){return requirement.trackingMode==='event';});
+  if(!trackable.length)return '<section id="requirements-view" class="'+(activeView==='requirements'?'':'view-hidden')+'"><div class="top"><h1>Graduation Requirements</h1></div><div class="empty-experience"><h2>No graduation requirements have been configured yet.</h2><p class="muted">Add one from the Dashboard to begin.</p></div></section>';
+  var details=trackable.map(function(requirement){return {requirement:requirement,stats:computeReqStats(requirement)};});
+  var total=details.reduce(function(sum,item){return sum+item.stats.target;},0), done=details.reduce(function(sum,item){return sum+Math.min(item.stats.target,item.stats.counts.completed);},0), percent=total?Math.round(done/total*100):0;
+  var priorities=details.filter(function(item){return item.stats.status!=='success';}).sort(function(a,b){return (b.stats.target-b.stats.pipeline)-(a.stats.target-a.stats.pipeline);}).slice(0,3);
+  var cards=details.map(function(item){var requirement=item.requirement,stats=item.stats, remaining=Math.max(0,stats.target-stats.counts.completed), pct=Math.min(100,stats.counts.completed/stats.target*100); var opportunities=state.clinicalEvents.filter(function(event){return (event.requirementId===requirement.id||event.procedureType===requirement.mapping?.procedureType)&&(event.status==='potential'||event.status==='planned'||event.status==='scheduled')&&event.patientId;}).slice(0,2).map(function(event){var patient=state.patients.find(function(p){return p.id===event.patientId;});return patient?'<p class="tiny-muted">'+esc(patient.label)+' · '+STATUS_LABEL[event.status]+' '+eventRequirementQuantity(event,requirement)+' '+esc(requirement.unit)+'</p>':'';}).join(''); return '<div class="card requirement-card"><div class="row between"><strong>'+esc(requirement.name)+'</strong><span class="badge '+stats.status+'">'+stats.label+'</span></div><div class="req-progress">'+stats.counts.completed+' / '+stats.target+' '+esc(requirement.unit)+'</div><div class="bar"><div class="seg" style="width:'+pct.toFixed(1)+'%;background:var(--teal);"></div></div><p class="tiny-muted">'+(remaining?remaining+' remaining':'Complete')+(requirement.startingCredit?' · includes '+requirement.startingCredit+' starting credit':'')+'</p>'+(requirement.notes?'<p class="tiny-muted">'+esc(requirement.notes)+'</p>':'')+opportunities+'</div>';}).join('');
+  var priorityHtml=priorities.length?priorities.map(function(item,index){return '<p class="activity-row">'+(index+1)+'. <strong>'+esc(item.requirement.name)+'</strong> — '+Math.max(0,item.stats.target-item.stats.counts.completed)+' remaining</p>';}).join(''):'<p class="muted">You’re caught up on your current numeric requirements.</p>';
+  return '<section id="requirements-view" class="'+(activeView==='requirements'?'':'view-hidden')+'"><div class="top"><h1>Graduation Requirements</h1></div><p class="muted">What you still need to graduate.</p><div class="experience-hero"><div class="lbl">Overall progress</div><div class="num">'+percent+'%</div><div class="bar"><div class="seg" style="width:'+percent+'%;background:var(--teal);"></div></div><p class="tiny-muted">'+done+' / '+total+' tracked units complete</p></div><section class="experience-group"><h2>Your priorities</h2><div class="card">'+priorityHtml+'</div></section><section class="experience-group"><h2>Clinical procedures</h2>'+cards+'</section><p class="points-note">Official Creighton GD point targets are configured separately and are not calculated from ClinicTrack Clinical Points.</p></section>';
+}
+
+function patientsMarkup(){
+  var cards=state.patients.map(function(patient){
+    var events=eventsForPatient(state,patient.id).slice().sort(function(a,b){return String(b.date||'').localeCompare(String(a.date||''));});
+    var opportunities=events.filter(function(event){return event.status==='potential'||event.status==='planned'||event.status==='scheduled';});
+    var latest=events[0];
+    var status=opportunities.some(function(event){return event.status==='scheduled';})?'Scheduled':opportunities.length?'In progress':events.length?'Active':'New';
+    var recent=events.slice(0,3).map(function(event){var type=PROCEDURE_TYPES[event.procedureType]||{label:'Clinical event'};return '<button class="patient-event event-edit" data-eid="'+event.id+'"><span>'+esc(type.label)+'</span><small>'+esc(STATUS_LABEL[event.status])+(event.notes?' · '+esc(event.notes):'')+'</small></button>';}).join('')||'<p class="tiny-muted">No clinical events yet.</p>';
+    var opportunityText=opportunities.length?opportunities.map(function(event){return esc((PROCEDURE_TYPES[event.procedureType]||{label:'Clinical event'}).label)+' · '+esc(STATUS_LABEL[event.status]);}).join('<br>'):'No potential, planned, or scheduled opportunities.';
+    return '<article class="patient-card"><div class="patient-card-head"><div><h2>'+esc(patient.label.split(/\s+/)[0]||patient.label)+'</h2><p>'+esc(status)+'</p></div><span class="patient-chip">'+esc(status)+'</span></div><div class="patient-opportunities"><strong>Upcoming opportunities</strong><p>'+opportunityText+'</p></div><div class="patient-history"><strong>Clinical history</strong>'+recent+'</div></article>';
+  }).join('')||'<div class="empty-experience"><h2>No patients yet.</h2><p class="muted">You can still log patientless clinical events.</p></div>';
+  return '<section id="patients-view" class="'+(activeView==='patients'?'':'view-hidden')+'"><div class="top"><h1>Patients</h1><div class="row"><button id="patients-add-patient">＋ Add patient</button><button class="primary" id="patients-add-event">＋ Add clinical event</button></div></div><p class="muted">A lightweight case view for clinical opportunities and event history.</p><div class="patient-grid">'+cards+'</div></section>';
+}
+
+function pearlsMarkup(){
+  var pearls=(DAILY_PEARLS||[]).map(function(pearl){return '<article class="pearl-library-item"><span>'+esc(pearl.category)+'</span><p>“'+esc(pearl.text)+'”</p></article>';}).join('');
+  return '<section id="pearls-view" class="'+(activeView==='pearls'?'':'view-hidden')+'"><div class="top"><h1>Daily Pearls</h1></div><p class="muted">Practical guidance for clinic, requirements, and dental school—not generic motivation.</p><div class="pearl-library">'+pearls+'</div></section>';
+}
+
+function render(){
+  var app=document.getElementById('app');
+  var pearlLibrary=DAILY_PEARLS||DEFAULT_QUOTES.map(function(text){return {category:'Daily Pearl',text:text};});
+  var idx=Math.floor(Date.now()/86400000)%pearlLibrary.length;
+  var currentPearl=pearlLibrary[idx];
+
+  var total=0,done=0;
+  state.requirements.forEach(function(r){total+=r.required;done+=Math.min(r.required,computeReqStats(r).counts.completed);});
+  total+=state.competencies.length;
+  done+=state.competencies.filter(function(c){return c.done;}).length;
+  var pct=total>0?Math.round(done/total*100):0;
+  var atRisk=state.requirements.filter(function(r){return computeReqStats(r).status==='danger';}).length;
+
+  var oppList=patientOpportunities(state).slice(0,5);
+  var oppHtml=oppList.length?oppList.map(function(o){
+    return '<div class="opp-row">'
+      +'<div><div class="opp-name">'+esc(o.patient.label)+'</div><div class="opp-detail">'+esc(o.label)+'</div></div>'
+      +'<button class="view-btn view-patient" data-id="'+o.patient.id+'">View patient</button>'
+      +'</div>';
+  }).join(''):'<p class="muted">Add patients with potential or planned procedures to see opportunities here.</p>';
+
+  var reqRows=state.requirements.map(function(req){
+    var s=computeReqStats(req);
+    var scale=Math.max(req.required,s.pipeline,1);
+    var segs=['completed','scheduled','planned','potential'].map(function(k){
+      var w=(s.counts[k]/scale*100);
+      if(w<=0)return '';
+      var color=k==='completed'?'var(--success)':k==='scheduled'?'var(--teal)':k==='planned'?'var(--warning)':'var(--line-strong)';
+      return '<div class="seg" style="width:'+w.toFixed(1)+'%;background:'+color+';"></div>';
+    }).join('');
+    var goalPct=Math.min(100,(req.required/scale*100)).toFixed(1);
+    return '<div class="divider">'
+      +'<div class="row between" style="margin-bottom:2px;">'
+      +'<input class="plain-input req-name" data-id="'+req.id+'" type="text" value="'+esc(req.name)+'" />'
+      +'<input type="number" min="0" step="1" class="req-count" data-id="'+req.id+'" value="'+req.required+'" style="width:56px;text-align:right;" />'
+      +'<button class="icon-btn req-del" data-id="'+req.id+'" aria-label="Remove">\u2715</button>'
+      +'</div>'
+      +'<div class="bar">'+segs+'<div class="goal" style="left:'+goalPct+'%;"></div></div>'
+      +'<div class="row between wrap">'
+      +'<span class="tiny-muted">'+s.counts.completed+' done \u00B7 '+s.counts.scheduled+' scheduled \u00B7 '+s.counts.planned+' planned \u00B7 '+s.counts.potential+' potential</span>'
+      +'<span class="badge '+s.status+'">'+s.label+'</span>'
+      +'</div></div>';
+  }).join('');
+
+  var compGrid=state.competencies.map(function(c){
+    return '<label class="comp-item">'
+      +'<input type="checkbox" class="comp-check" data-id="'+c.id+'" '+(c.done?'checked':'')+' />'
+      +'<input type="text" class="plain-input comp-name" data-id="'+c.id+'" value="'+esc(c.name)+'" style="font-weight:400;font-size:13px;" />'
+      +'<button class="icon-btn comp-del" data-id="'+c.id+'" aria-label="Remove" style="font-size:13px;">\u2715</button>'
+      +'</label>';
+  }).join('');
+
+  var gapsList=state.requirements.map(function(r){return {r:r,s:computeReqStats(r)};}).filter(function(x){return x.s.status!=='success';});
+  gapsList.sort(function(a,b){var order={danger:0,warning:1};return (order[a.s.status]||2)-(order[b.s.status]||2);});
+  var gapsHtml=gapsList.length?gapsList.map(function(g){
+    var remaining=Math.max(0,g.r.required-g.s.counts.completed);
+    var helpers=[];
+    state.clinicalEvents.forEach(function(event){if(event.requirementId===g.r.id&&(event.status==='potential'||event.status==='planned')){var patient=state.patients.find(function(p){return p.id===event.patientId;});if(patient)helpers.push(patient.label+' \u00D7'+eventRequirementQuantity(event)+' ('+STATUS_LABEL[event.status]+(event.date?', '+formatDate(event.date):'')+')');}});
+    return '<div style="padding:8px 0;">'
+      +'<div class="row between"><span style="font-size:14px;font-weight:500;">'+esc(g.r.name)+'</span><span class="badge '+g.s.status+'">'+remaining+' to complete</span></div>'
+      +(helpers.length?'<p class="tiny-muted" style="margin-top:4px;">From: '+helpers.slice(0,3).map(esc).join(', ')+'</p>':'<p class="tiny-muted" style="margin-top:4px;">No patients in your pipeline for this yet.</p>')
+      +'</div>';
+  }).join(''):'<p class="muted" style="color:var(--success);">Every requirement is projected complete.</p>';
+
+  var reqOptions=state.requirements.map(function(r){return '<option value="'+r.id+'">'+esc(r.name)+'</option>';}).join('');
+  var statusOptions=STATUSES.map(function(s){return '<option value="'+s+'">'+STATUS_LABEL[s]+'</option>';}).join('');
+  var patientsHtml=state.patients.length?state.patients.map(function(p){
+    var rows=eventsForPatient(state,p.id).map(function(pr){
+      var name=requirementLabel(state,pr), eventStep=quantityStepFor?quantityStepFor(pr.procedureType):1;
+      return '<div class="proc-row" data-status="'+pr.status+'">'
+        +'<span class="proc-name">'+esc(name)+'</span>'
+        +'<input type="number" min="'+eventStep+'" step="'+eventStep+'" class="proc-qty" data-eid="'+pr.id+'" value="'+(pr.quantity||eventStep)+'" title="Quantity" />'
+        +'<select class="proc-status-select" data-eid="'+pr.id+'">'+statusOptionsHtml(pr.status)+'</select>'
+        +'<input type="date" class="proc-date" data-eid="'+pr.id+'" value="'+(pr.date||'')+'" title="Target date (optional)" />'
+        +(pr.procedureType==='rct'?'<input type="number" min="1" class="proc-canals" data-eid="'+pr.id+'" value="'+pr.canalCount+'" title="Canals" />':'')
+        +'<button class="proc-edit" data-eid="'+pr.id+'">Edit</button>'
+        +'<i class="proc-remove" data-eid="'+pr.id+'" aria-label="Remove procedure">\u2715</i>'
+        +'</div>';
+    }).join('');
+    return '<div class="divider" id="patient-'+p.id+'">'
+      +'<div class="row between" style="margin-bottom:8px;">'
+      +'<input class="plain-input pat-label" data-id="'+p.id+'" type="text" value="'+esc(p.label)+'" />'
+      +'<button class="icon-btn pat-del" data-id="'+p.id+'" aria-label="Remove">\u2715</button>'
+      +'</div>'
+      +'<div style="margin-bottom:10px;">'+(rows||'<span class="tiny-muted">No procedures yet.</span>')+'</div>'
+      +'<div class="row wrap">'
+      +'<select class="proc-req" data-pid="'+p.id+'" style="flex:1;min-width:120px;">'+reqOptions+'</select>'
+      +'<input type="number" min="0.5" step="0.5" class="new-proc-qty" data-pid="'+p.id+'" value="1" style="width:48px;" title="Quantity" />'
+      +'<select class="proc-status" data-pid="'+p.id+'">'+statusOptions+'</select>'
+      +'<input type="date" class="new-proc-date" data-pid="'+p.id+'" style="max-width:130px;" title="Target date (optional)" />'
+      +'<button class="proc-add" data-pid="'+p.id+'">Add</button>'
+      +'</div></div>';
+  }).join(''):'<p class="muted">No patients yet. Add one below to start mapping procedures to requirements.</p>';
+
+  var communityHtml=communityQuotes.length?communityQuotes.slice(-3).reverse().map(function(q){
+    return '<p class="tiny-muted" style="margin-top:4px;">\u201C'+esc(q)+'\u201D \u2014 saved reminder</p>';
+  }).join(''):'';
+
+  // Dashboard values are derived from the same clinical-event ledger used
+  // everywhere else; no duplicate totals are stored here.
+  var completedEvents=state.clinicalEvents.filter(function(event){return event.status==='completed';});
+  var clinicalPoints=computeClinicalPoints(state);
+  var eventCount=state.clinicalEvents.length;
+  var activePatientCount=state.patients.length;
+  var trackedRequirements=state.requirements.filter(function(requirement){return requirement.trackingMode==='event';});
+  var trackedTarget=trackedRequirements.reduce(function(sum,requirement){return sum+computeReqStats(requirement).target;},0);
+  var trackedComplete=trackedRequirements.reduce(function(sum,requirement){var stats=computeReqStats(requirement);return sum+Math.min(stats.target,stats.counts.completed);},0);
+  var trackedPct=trackedTarget?Math.round(trackedComplete/trackedTarget*100):0;
+  var completeRequirementCount=trackedRequirements.filter(function(requirement){var stats=computeReqStats(requirement);return stats.counts.completed>=stats.target;}).length;
+  var displayDate=new Date().toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric',year:'numeric'});
+  var recentActivity=state.clinicalEvents.slice().sort(function(a,b){return String(b.date||'').localeCompare(String(a.date||''));}).slice(0,5).map(function(event){
+    var patient=event.patientId&&state.patients.find(function(item){return item.id===event.patientId;});
+    var type=PROCEDURE_TYPES[event.procedureType]||{label:'Clinical event',clinicalPoints:0};
+    var detail=event.procedureType==='rct'?'RCT ('+event.canalCount+' canal'+(event.canalCount===1?'':'s')+')':type.label;
+    var pointValue=event.status==='completed'?(type.clinicalPoints||0)*event.quantity:0;
+    return '<button class="ledger-row event-edit" data-eid="'+event.id+'"><span class="ledger-date">'+esc(formatDate(event.date)||'No date')+'</span><span class="ledger-type">'+esc(detail)+'</span><span class="ledger-status '+esc(event.status)+'">'+esc(STATUS_LABEL[event.status])+'</span><span class="ledger-patient">'+esc(patient?patient.label:'—')+'</span><span class="ledger-points">'+(pointValue?('+'+pointValue+' pts'):'')+'</span></button>';
+  }).join('')||'<p class="empty-panel">No clinical activity yet. Add your first event to begin your ledger.</p>';
+  var experienceStats=computeClinicalExperienceStats(state);
+  var experienceRows=Object.keys(PROCEDURE_TYPES).filter(function(key){return (experienceStats[key]||0)>0;}).slice(0,7).map(function(key){return '<div class="summary-row"><span>'+esc(PROCEDURE_TYPES[key].label)+'</span><strong>'+experienceStats[key]+'</strong></div>';}).join('')||'<p class="empty-panel">Completed events will appear here.</p>';
+  var requirementRows=trackedRequirements.slice(0,6).map(function(requirement){var stats=computeReqStats(requirement), target=stats.target||1, progress=Math.min(100,stats.counts.completed/target*100);return '<div class="requirement-summary"><div><span>'+esc(requirement.name)+'</span><strong>'+stats.counts.completed+' / '+target+'</strong></div><div class="bar"><div class="seg" style="width:'+progress.toFixed(1)+'%;background:var(--teal);"></div></div></div>';}).join('')||'<p class="empty-panel">Requirements will appear here.</p>';
+  var patientSummary=state.patients.slice(0,5).map(function(patient){var latest=eventsForPatient(state,patient.id).slice().sort(function(a,b){return String(b.date||'').localeCompare(String(a.date||''));})[0];var label=latest?((PROCEDURE_TYPES[latest.procedureType]||{label:'Clinical activity'}).label):'No activity logged';return '<button class="patient-summary view-patient" data-id="'+patient.id+'"><span class="patient-avatar">●</span><span><strong>'+esc(patient.label)+'</strong><small>'+esc(label)+'</small></span><span class="patient-chip">'+(latest?esc(STATUS_LABEL[latest.status]):'NEW')+'</span></button>';}).join('')||'<p class="empty-panel">Add a patient when you need to associate activity with one.</p>';
+  var recoveryAvailable=false;
+  try { recoveryAvailable=Boolean(loadRecovery&&loadRecovery()); } catch (e) {}
+  var dataTools='<section class="data-tools"><h2>Your local data</h2><p class="tiny-muted">Export a backup before moving browsers or devices. Import replaces the data on this browser only.</p><div class="row wrap"><button id="export-data">Export backup</button><label class="import-button">Import backup<input id="import-data" type="file" accept="application/json,.json" /></label>'+(recoveryAvailable?'<button class="danger-action" id="restore-recovery">Restore preserved recovery copy</button>':'')+'</div><p class="err" id="data-err"></p></section>';
+
+  app.innerHTML=
+    '<nav class="main-nav" aria-label="Primary navigation"><div class="brand"><span>ClinicTrack<small>Creighton dental school · real progress</small></span></div><button class="nav-btn '+(activeView==='dashboard'?'active':'')+'" data-view="dashboard">Home</button><button class="nav-btn '+(activeView==='experience'?'active':'')+'" data-view="experience">Experience</button><button class="nav-btn '+(activeView==='requirements'?'active':'')+'" data-view="requirements">Requirements</button><button class="nav-btn '+(activeView==='patients'?'active':'')+'" data-view="patients">Patients</button><button class="nav-btn '+(activeView==='pearls'?'active':'')+'" data-view="pearls">Daily Pearls</button></nav>'
+    +'<section id="dashboard-view" class="dashboard '+(activeView==='dashboard'?'':'view-hidden')+'"><header class="dashboard-heading"><img class="home-bluejay" src="assets/creighton-bluejay.png" alt="Creighton Bluejay" /><div><h1>Creighton School of Dentistry</h1><p>Good afternoon. Log today. Build tomorrow.</p></div><div class="dashboard-date">'+esc(displayDate)+'<small>Creighton dental ledger</small></div></header>'
+    +'<div class="metrics dashboard-metrics"><div class="metric tracked-metric"><div class="metric-icon">✓</div><div><div class="lbl">Tracked Requirements</div><div class="num">'+trackedPct+'%</div><small>complete · '+trackedComplete+' / '+trackedTarget+' tracked units</small></div></div><div class="metric"><div class="metric-icon">✦</div><div><div class="lbl">Procedures Logged</div><div class="num">'+eventCount+'</div><small>Total clinical events</small></div></div><div class="metric"><div class="metric-icon">♙</div><div><div class="lbl">Patients</div><div class="num">'+activePatientCount+'</div><small>Active patients</small></div></div><div class="metric"><div class="metric-icon">★</div><div><div class="lbl">Clinical Points</div><div class="num">'+clinicalPoints+'</div><small>From completed events</small></div></div></div>'
+    +'<div class="dashboard-action"><button class="primary dashboard-add" id="quick-add">＋ Add Clinical Event</button></div>'
+    +'<div class="dashboard-grid priority-grid"><section class="dashboard-card"><div class="panel-heading"><h2>Your Priorities</h2><button class="text-action" data-view="requirements">Review →</button></div><div id="gaps">'+gapsHtml+'</div></section><section class="dashboard-card"><div class="panel-heading"><h2>Upcoming Opportunities</h2><button class="text-action" data-view="patients">Patients →</button></div><div id="opportunities">'+oppHtml+'</div></section></div>'
+    +'<div class="dashboard-grid top-grid"><section class="dashboard-card activity-card"><div class="panel-heading"><h2>Recent Activity</h2><button class="text-action" data-view="experience">View all →</button></div><div class="ledger-head"><span>Date</span><span>Procedure</span><span>Status</span><span>Patient</span><span>Points</span></div><div class="ledger">'+recentActivity+'</div></section><section class="dashboard-card pearl-card" id="daily-pearl"><div class="panel-heading"><h2>Today’s Daily Pearl</h2><button class="text-action" data-view="pearls">Library →</button></div><p class="quote" id="quote-text">“'+esc(currentPearl.text)+'”</p><div class="pearl-rule"></div><small>'+esc(currentPearl.category)+'</small><div class="pearl-compose"><input type="text" id="quote-input" placeholder="Add a personal reminder" /><button id="quote-add">Save</button></div><p class="err" id="quote-err"></p><div id="community-list">'+communityHtml+'</div></section></div>'
+    +'<div class="dashboard-grid lower-grid"><section class="dashboard-card compact-panel"><div class="panel-heading"><h2>Clinical Experience</h2><button class="text-action" data-view="experience">View details →</button></div><div class="summary-list">'+experienceRows+'</div></section><section class="dashboard-card compact-panel"><div class="panel-heading"><h2>Requirements</h2><button class="text-action" data-view="requirements">View all →</button></div><div class="summary-list">'+requirementRows+'</div><div class="progress-footer"><strong>'+trackedPct+'%</strong><span>tracked progress</span></div></section><section class="dashboard-card compact-panel" id="patients-panel"><div class="panel-heading"><h2>Patients</h2><button class="text-action" data-view="patients">View all →</button></div><div class="patient-list">'+patientSummary+'</div><button class="outline-action" id="dashboard-add-patient">＋ Add Patient</button></section></div>'
+    +'<details class="tracker-management" id="patient-management"><summary>Manage tracker data</summary><p class="muted">Edit requirements, competencies, patients, and existing events.</p>'+dataTools+'<h2>Requirements</h2><div id="requirements">'+reqRows+'</div>'
+    +'<div class="row" style="margin-top:12px;">'
+      +'<input type="text" id="new-req-name" placeholder="New requirement, e.g. Bridges" style="flex:1;" />'
+      +'<input type="number" min="0" id="new-req-count" placeholder="#" style="width:56px;" />'
+      +'<button id="add-req">Add</button>'
+    +'</div><p class="err" id="req-err"></p>'
+    +'<h2>Competencies</h2>'
+    +'<div class="comp-grid" id="competencies">'+compGrid+'</div>'
+    +'<div class="row" style="margin-top:12px;">'
+      +'<input type="text" id="new-comp-name" placeholder="New competency, e.g. Sedation" style="flex:1;" />'
+      +'<button id="add-comp">Add</button>'
+    +'</div><p class="err" id="comp-err"></p>'
+    +'<h2>What you need</h2>'
+    +'<div id="gaps">'+gapsHtml+'</div>'
+    +'<h2>Patients</h2>'
+    +'<div id="patients">'+patientsHtml+'</div>'
+    +'<div class="row" style="margin-top:12px;">'
+      +'<input type="text" id="new-patient" placeholder="New patient, e.g. Patient 4827" style="flex:1;" />'
+      +'<button id="add-patient">Add</button>'
+    +'</div><p class="err" id="patient-err"></p>'
+    +'<p class="saved-note" style="margin-top:24px;">Data is saved in this browser, on this device. Opening the file on another device or browser starts fresh.</p><button class="reset" id="reset-btn">Start over</button></details></section>'
+    +experienceMarkup()
+    +requirementsMarkup()
+    +patientsMarkup()
+    +pearlsMarkup()
+    +quickAddMarkup()+confirmationMarkup()+(successMessage?'<div class="success-toast" role="status">'+esc(successMessage)+'</div>':'')+(persistenceError?'<div class="err" role="alert" style="position:fixed;left:20px;right:20px;bottom:76px;z-index:31;background:#fff;padding:10px;border:1px solid var(--danger);border-radius:6px;">'+esc(persistenceError)+'</div>':'');
+
+  attachEvents();
+}
+
+function attachEvents(){
+  document.querySelectorAll('.nav-btn[data-view]').forEach(function(button){button.onclick=function(){activeView=button.dataset.view;render();};});
+  if(confirmation){
+    document.getElementById('confirm-cancel').onclick=function(){confirmation=null;render();};
+    document.getElementById('confirm-accept').onclick=function(){var action=confirmation.action;confirmation=null;action();};
+  }
+  document.querySelectorAll('[data-target]').forEach(function(button){button.onclick=function(){var target=document.getElementById(button.dataset.target);if(target){if(target.tagName==='DETAILS')target.open=true;target.scrollIntoView({behavior:'smooth',block:'start'});}};});
+  document.querySelectorAll('.text-action[data-view]').forEach(function(button){button.onclick=function(){activeView=button.dataset.view;render();};});
+  document.querySelectorAll('.event-edit').forEach(function(button){button.onclick=function(){var event=state.clinicalEvents.find(function(item){return item.id===button.dataset.eid;});if(event)openQuickAdd(event);};});
+  document.querySelectorAll('.patient-summary').forEach(function(button){button.onclick=function(){var manager=document.getElementById('patient-management');if(manager)manager.open=true;var patient=document.getElementById('patient-'+button.dataset.id);if(patient)patient.scrollIntoView({behavior:'smooth',block:'center'});};});
+  var dashboardAddPatient=document.getElementById('dashboard-add-patient');
+  if(dashboardAddPatient)dashboardAddPatient.onclick=function(){var manager=document.getElementById('patient-management');if(manager){manager.open=true;manager.scrollIntoView({behavior:'smooth',block:'start'});setTimeout(function(){var field=document.getElementById('new-patient');if(field)field.focus();},250);}};
+  document.getElementById('quick-add').onclick=function(){openQuickAdd(null);};
+  var experienceAdd=document.getElementById('experience-add');
+  if(experienceAdd)experienceAdd.onclick=function(){openQuickAdd(null);};
+  var patientsAddEvent=document.getElementById('patients-add-event');
+  if(patientsAddEvent)patientsAddEvent.onclick=function(){openQuickAdd(null);};
+  var patientsAddPatient=document.getElementById('patients-add-patient');
+  if(patientsAddPatient)patientsAddPatient.onclick=function(){activeView='dashboard';render();var shortcut=document.getElementById('dashboard-add-patient');if(shortcut)shortcut.click();};
+  document.getElementById('export-data').onclick=function(){
+    var blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),link=document.createElement('a');
+    link.href=url;link.download='clinictrack-backup-'+today()+'.json';document.body.appendChild(link);link.click();link.remove();URL.revokeObjectURL(url);
+  };
+  document.getElementById('import-data').onchange=function(event){
+    var file=event.target.files&&event.target.files[0];if(!file)return;
+    var reader=new FileReader();reader.onload=function(){
+      try { var imported=validateAndMigrateState(JSON.parse(reader.result)); askConfirmation('Replace local ClinicTrack data?','This will replace the current data on this browser with the selected backup.',function(){state=imported;persistenceError='';saveState();successMessage='Backup imported';render();},'Import'); }
+      catch(error){var errorBox=document.getElementById('data-err');if(errorBox)errorBox.textContent='This backup could not be read.';}
+    };reader.readAsText(file);
+  };
+  var restoreRecovery=document.getElementById('restore-recovery');
+  if(restoreRecovery)restoreRecovery.onclick=function(){
+    try { var recovered=validateAndMigrateState(loadRecovery()); askConfirmation('Restore preserved recovery data?','This will replace the current data on this browser with the preserved recovery copy.',function(){state=recovered;saveState();clearRecovery();persistenceError='';successMessage='Recovery copy restored';render();},'Restore'); }
+    catch(error){persistenceError='The preserved recovery copy could not be read.';render();}
+  };
+  document.querySelectorAll('#experience-view .proc-edit').forEach(function(button){button.onclick=function(){var event=state.clinicalEvents.find(function(item){return item.id===button.dataset.eid;});if(event)openQuickAdd(event);};});
+  if(quickAdd){
+    document.querySelectorAll('.procedure-choice').forEach(function(button){button.onclick=function(){quickAdd={...quickAdd,procedureType:button.dataset.type,canalCount:button.dataset.type==='rct'?(quickAdd.canalCount??1):null,errors:{}};render();};});
+    document.getElementById('quick-close').onclick=function(){quickAdd=null;render();};
+    document.getElementById('quick-cancel').onclick=function(){quickAdd=null;render();};
+    var quickDelete=document.getElementById('quick-delete');
+    if(quickDelete)quickDelete.onclick=function(){
+      var eventId=quickAdd.id;askConfirmation('Delete this clinical event?','This will remove it from your clinical history and progress totals.',function(){state=deleteClinicalEvent(state,eventId);saveState();quickAdd=null;successMessage='Event deleted';render();});
+    };
+    document.getElementById('quick-save').onclick=function(){
+      var selectedType=quickAdd.procedureType;
+      var matchingRequirement=state.requirements.find(function(requirement){return procedureTypeForRequirement(requirement)===selectedType;});
+      var input={procedureType:selectedType,quantity:document.getElementById('quick-quantity').value,status:document.getElementById('quick-status').value,date:document.getElementById('quick-date').value,patientId:document.getElementById('quick-patient').value||null,notes:document.getElementById('quick-notes').value,canalCount:selectedType==='rct'?document.getElementById('quick-canals').value:null,requirementId:quickAdd.requirementId||(matchingRequirement?matchingRequirement.id:null),requirementName:quickAdd.requirementName||(matchingRequirement?matchingRequirement.name:'')};
+      var wasEditing=Boolean(quickAdd.id);
+      var result=saveQuickAddEvent(state,input,quickAdd.id||null);
+      if(!result.event){quickAdd={...quickAdd,...input,errors:result.errors};render();return;}
+      state=result.state;var saved=saveState();quickAdd=null;successMessage=saved?(wasEditing?'Event updated':'Clinical event saved'):'';render();
+      setTimeout(function(){if(successMessage){successMessage='';render();}},1800);
+    };
+  }
+  document.getElementById('reset-btn').onclick=function(){
+    askConfirmation('Start over with default data?','This replaces your requirements, competencies, patients, and clinical events on this browser.',function(){state=createDefaultState();saveState();render();},'Start over');
+  };
+
+  document.getElementById('opportunities').addEventListener('click',function(e){
+    var b=e.target.closest('.view-patient');
+    if(b){
+      var el=document.getElementById('patient-'+b.dataset.id);
+      if(el)el.scrollIntoView({behavior:'smooth',block:'center'});
+    }
+  });
+
+  document.getElementById('requirements').addEventListener('change',function(e){
+    var t=e.target;
+    if(t.classList.contains('req-name')){var r=state.requirements.find(function(x){return x.id===t.dataset.id;});if(r)r.name=t.value;saveState();render();}
+    else if(t.classList.contains('req-count')){var r2=state.requirements.find(function(x){return x.id===t.dataset.id;});if(r2){r2.target=Math.max(0,parseInt(t.value)||0);r2.required=r2.target;}saveState();render();}
+  });
+  document.getElementById('requirements').addEventListener('click',function(e){
+    var d=e.target.closest('.req-del');
+    if(d){var requirementId=d.dataset.id;askConfirmation('Archive this requirement?','Existing clinical events will be kept as historical records.',function(){state=archiveRequirement(state,requirementId);saveState();render();},'Archive');}
+  });
+  document.getElementById('add-req').onclick=function(){
+    var nameEl=document.getElementById('new-req-name'),countEl=document.getElementById('new-req-count'),err=document.getElementById('req-err');
+    var name=nameEl.value.trim(),count=parseInt(countEl.value);
+    if(!name){err.textContent='Enter a requirement name first.';return;}
+    if(isNaN(count)||count<0){err.textContent='Enter how many are required.';return;}
+    state=addRequirement(state,{name:name,target:count});
+    saveState();render();
+  };
+
+  document.getElementById('competencies').addEventListener('change',function(e){
+    var t=e.target;
+    if(t.classList.contains('comp-check')){var c=state.competencies.find(function(x){return x.id===t.dataset.id;});if(c)c.done=t.checked;saveState();render();}
+    else if(t.classList.contains('comp-name')){var c2=state.competencies.find(function(x){return x.id===t.dataset.id;});if(c2)c2.name=t.value;saveState();}
+  });
+  document.getElementById('competencies').addEventListener('click',function(e){
+    var d=e.target.closest('.comp-del');
+    if(d){var competencyId=d.dataset.id;askConfirmation('Remove this competency?','This removes only this competency from the local tracker.',function(){state.competencies=state.competencies.filter(function(x){return x.id!==competencyId;});saveState();render();});}
+  });
+  document.getElementById('add-comp').onclick=function(){
+    var nameEl=document.getElementById('new-comp-name'),err=document.getElementById('comp-err');
+    var name=nameEl.value.trim();
+    if(!name){err.textContent='Enter a competency name first.';return;}
+    state.competencies.push({id:createId('c'),name:name,done:false});
+    saveState();render();
+  };
+
+  document.getElementById('patients').addEventListener('change',function(e){
+    var t=e.target;
+    if(t.classList.contains('pat-label')){var p=state.patients.find(function(x){return x.id===t.dataset.id;});if(p)p.label=t.value;saveState();render();}
+    else if(t.classList.contains('proc-qty')){
+      var event=state.clinicalEvents.find(function(item){return item.id===t.dataset.eid;});
+      var step=event&&quantityStepFor?quantityStepFor(event.procedureType):1;
+      var entered=Number(t.value);
+      if(!Number.isFinite(entered)||entered<step||Math.abs(entered/step-Math.round(entered/step))>.000001){t.value=event.quantity;return;}
+      state=updateClinicalEvent(state,t.dataset.eid,{quantity:entered});saveState();render();
+    }
+    else if(t.classList.contains('proc-status-select')){
+      state=updateClinicalEvent(state,t.dataset.eid,{status:t.value});saveState();render();
+    }
+    else if(t.classList.contains('proc-date')){
+      state=updateClinicalEvent(state,t.dataset.eid,{date:t.value});saveState();
+    }
+    else if(t.classList.contains('proc-canals')){
+      state=updateClinicalEvent(state,t.dataset.eid,{canalCount:Math.max(1,parseInt(t.value)||1)});saveState();render();
+    }
+  });
+  document.getElementById('patients').addEventListener('click',function(e){
+    if(e.target.closest('.proc-qty')||e.target.closest('.proc-status-select')||e.target.closest('.proc-date')||e.target.closest('.proc-canals'))return;
+    var d=e.target.closest('.pat-del');
+    if(d){var patientId=d.dataset.id;askConfirmation('Remove this patient?','Their clinical events will be retained without a patient link.',function(){state=unlinkPatient(state,patientId);saveState();render();});return;}
+    var rem=e.target.closest('.proc-remove');
+    if(rem){var eventId=rem.dataset.eid;askConfirmation('Delete this clinical event?','This will remove it from your clinical history and progress totals.',function(){state=deleteClinicalEvent(state,eventId);saveState();render();});return;}
+    var edit=e.target.closest('.proc-edit');
+    if(edit){var event=state.clinicalEvents.find(function(item){return item.id===edit.dataset.eid;});if(event)openQuickAdd(event);return;}
+    var add=e.target.closest('.proc-add');
+    if(add){
+      var pid=add.dataset.pid;
+      var reqSel=document.querySelector('.proc-req[data-pid="'+pid+'"]');
+      var statSel=document.querySelector('.proc-status[data-pid="'+pid+'"]');
+      var qtyEl=document.querySelector('.new-proc-qty[data-pid="'+pid+'"]');
+      var dateEl=document.querySelector('.new-proc-date[data-pid="'+pid+'"]');
+      var requirement=reqSel?state.requirements.find(function(item){return item.id===reqSel.value;}):null;
+      if(requirement&&statSel){
+        var procedureType=procedureTypeForRequirement(requirement);
+        var qty=Number(qtyEl&&qtyEl.value);
+        var step=quantityStepFor?quantityStepFor(procedureType):1;
+        if(!Number.isFinite(qty)||qty<step||Math.abs(qty/step-Math.round(qty/step))>.000001)qty=step;
+        state=addClinicalEvent(state,{procedureType:procedureType,quantity:procedureType==='rct'?1:qty,canalCount:procedureType==='rct'?qty:null,patientId:pid,requirementId:reqSel.value,requirementName:requirement.name,status:statSel.value,date:dateEl?dateEl.value:''});
+        saveState();render();
+      }
+      return;
+    }
+  });
+  document.getElementById('add-patient').onclick=function(){
+    var nameEl=document.getElementById('new-patient'),err=document.getElementById('patient-err');
+    var name=nameEl.value.trim();
+    if(!name){err.textContent='Enter a patient identifier first.';return;}
+    state.patients.push({id:createId('p'),label:name,procedures:[]});
+    saveState();render();
+  };
+
+  document.getElementById('quote-add').onclick=function(){
+    var input=document.getElementById('quote-input'),err=document.getElementById('quote-err');
+    var val=input.value.trim();
+    if(!val){err.textContent='Write a thought before sharing.';return;}
+    communityQuotes.push(val);
+    saveCommunity();
+    render();
+  };
+}
+
+try {
+  state=loadState();
+  communityQuotes=loadQuotes();
+  var recoveredLoadError=getLoadError&&getLoadError();
+  if(recoveredLoadError)persistenceError=recoveredLoadError.message;
+} catch (e) {
+  state=createDefaultState();
+  communityQuotes=[];
+}
+render();
+window.ClinicTrackBoot.started=true;
+} catch (error) {
+  console.error('ClinicTrack initialization failed.', error);
+  var app=document.getElementById('app');
+  var detail=String(error&&error.message||'Unknown initialization error').replace(/[&<>"']/g,'');
+  if(app)app.innerHTML='<div class="loading">ClinicTrack couldn\'t start. Please reload the page.<br><span class="tiny-muted">'+detail+'</span></div>';
+}
+})();
+
+</script>
+</body>
+</html>
